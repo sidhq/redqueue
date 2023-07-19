@@ -1,16 +1,17 @@
-package requeue
+package redqueue
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// A DelayFunc is used to decide the amount of time to wait between retries.
-type DelayFunc func(tries int) time.Duration
+var ErrFailed = errors.New("redsync: failed to acquire lock")
+var ErrExtendFailed = errors.New("redsync: failed to extend lock")
 
 // A Lease is a distributed mutual exclusion lock.
 type Lease struct {
@@ -48,7 +49,7 @@ func (m *Lease) Extend(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if !held {
-		return false, ErrFailed
+		return false, ErrExtendFailed
 	}
 	now := time.Now()
 	until := now.Add(m.expiry - now.Sub(start) - time.Duration(int64(float64(m.expiry)*m.driftFactor)))
@@ -66,14 +67,6 @@ func genValue() (string, error) {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(b), nil
-}
-
-func (m *Lease) acquire(ctx context.Context, client *redis.Client, value string) (bool, error) {
-	reply, err := client.SetNX(ctx, m.name, value, m.expiry).Result()
-	if err != nil {
-		return false, err
-	}
-	return reply, nil
 }
 
 var deleteScript = redis.NewScript(`

@@ -2,41 +2,64 @@ package main
 
 import (
 	"context"
-	"sync"
+	"fmt"
+	"log"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	requeue "github.com/sidhq/redis-queue"
+	"github.com/sidhq/redqueue"
 )
 
 func main() {
 
 	client := redis.NewClient(&redis.Options{Addr: "localhost:6379", Password: "", DB: 0})
-	queue := requeue.New(client, "queue")
+	queue := redqueue.New(client, "queue")
 
-	val := make([]int, 1)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			mutex := queue.NewLease("test")
-			for {
-				ok, err := mutex.Lock(context.Background())
+	go func() {
+		for {
+			for i := 0; i < 100; i++ {
+				ok, err := queue.Push(context.Background(), fmt.Sprintf("%d", i), time.Second)
 				if err != nil {
 					panic(err)
 				}
 				if !ok {
+					log.Printf("push failed")
 					time.Sleep(100 * time.Millisecond)
 					continue
+				} else {
+					log.Printf("push ok")
 				}
-				defer mutex.Unlock(context.Background())
-				val[0]++
-				return
 			}
-		}()
+		}
+	}()
+	for i := 0; i < 3; i++ {
+		go func(id int) {
+			for {
+				lease, err := queue.Pop(context.Background())
+				if err != nil {
+					panic(err)
+				}
+				if lease == nil {
+					continue
+				}
+				time.Sleep(500 * time.Millisecond)
+				if ok, err := lease.Extend(context.Background()); err != nil {
+					panic(err)
+				} else if !ok {
+					log.Printf("extend failed")
+				}
+				time.Sleep(600 * time.Millisecond)
+				ok, err := lease.Unlock(context.Background())
+				if err != nil {
+					panic(err)
+				}
+				if !ok {
+					log.Printf("unlock failed")
+				}
+			}
+		}(i)
 	}
-	wg.Wait()
-	println(val[0])
+	for {
+		time.Sleep(1 * time.Second)
+	}
 }
