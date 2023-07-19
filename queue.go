@@ -12,7 +12,6 @@ import (
 type Queue struct {
 	name        string
 	client      *redis.Client
-	expiry      time.Duration
 	driftFactor float64
 }
 
@@ -21,7 +20,6 @@ func New(client *redis.Client, name string) *Queue {
 	return &Queue{
 		name:        name + ":redqueue",
 		client:      client,
-		expiry:      8 * time.Second,
 		driftFactor: 0.05,
 	}
 }
@@ -57,9 +55,9 @@ func (r *Queue) Push(ctx context.Context, item string, expiry time.Duration) (bo
 	return true, nil
 }
 
-func (r *Queue) Pop(ctx context.Context) (*Lease, error) {
-	start := time.Now()
+func (r *Queue) Pop(ctx context.Context, initialDuration time.Duration) (*Lease, error) {
 	token, err := genToken()
+	start := time.Now()
 	if err != nil {
 		return nil, errors.Wrap(err, "generate value")
 	}
@@ -70,7 +68,7 @@ func (r *Queue) Pop(ctx context.Context) (*Lease, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "pop")
 	}
-	res, err := claimScript.Run(ctx, r.client, []string{key}, token, int(r.expiry/time.Millisecond)).Result()
+	res, err := claimScript.Run(ctx, r.client, []string{key}, token, int(initialDuration/time.Millisecond)).Result()
 	if err != nil {
 		return nil, errors.Wrap(err, "claim")
 	}
@@ -79,17 +77,15 @@ func (r *Queue) Pop(ctx context.Context) (*Lease, error) {
 	}
 
 	now := time.Now()
-	until := now.Add(r.expiry - now.Sub(start) - time.Duration(int64(float64(r.expiry)*r.driftFactor)))
+	until := now.Add(initialDuration - now.Sub(start) - time.Duration(int64(float64(initialDuration)*r.driftFactor)))
 	return r.newLease(key, until, token), nil
 }
 
-// newLease returns a new distributed mutex with given name.
 func (r *Queue) newLease(key string, until time.Time, token string) *Lease {
 	item := key[:len(key)-len(r.name)-1]
 	m := &Lease{
 		item:        item,
 		key:         key,
-		expiry:      1 * time.Second,
 		client:      r.client,
 		driftFactor: r.driftFactor,
 		token:       token,

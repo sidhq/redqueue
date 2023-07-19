@@ -15,9 +15,8 @@ var ErrExtendFailed = errors.New("redsync: failed to extend lock")
 
 // A Lease is a distributed mutual exclusion lock.
 type Lease struct {
-	item   string
-	key    string
-	expiry time.Duration
+	item string
+	key  string
 
 	driftFactor float64
 
@@ -43,9 +42,9 @@ func (m *Lease) Release(ctx context.Context) (bool, error) {
 }
 
 // Extend resets the mutex's expiry and returns the status of expiry extension.
-func (m *Lease) Extend(ctx context.Context) (bool, error) {
+func (m *Lease) Extend(ctx context.Context, duration time.Duration) (bool, error) {
 	start := time.Now()
-	held, err := m.touch(ctx, m.client, m.token, m.expiry)
+	held, err := m.touch(ctx, m.client, m.token, duration)
 	if err != nil {
 		return false, err
 	}
@@ -53,7 +52,7 @@ func (m *Lease) Extend(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	now := time.Now()
-	until := now.Add(m.expiry - now.Sub(start) - time.Duration(int64(float64(m.expiry)*m.driftFactor)))
+	until := now.Add(duration - now.Sub(start) - time.Duration(int64(float64(duration)*m.driftFactor)))
 	if now.Before(until) {
 		m.until = until
 		return true, nil

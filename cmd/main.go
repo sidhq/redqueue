@@ -35,7 +35,7 @@ func main() {
 	for i := 0; i < 20; i++ {
 		go func(id int) {
 			for {
-				lease, err := queue.Pop(context.Background())
+				lease, err := queue.Pop(context.Background(), time.Second)
 				if err != nil {
 					panic(err)
 				}
@@ -45,7 +45,7 @@ func main() {
 				idx, _ := strconv.Atoi(lease.Item())
 				keys[idx] = true
 				time.Sleep(500 * time.Millisecond)
-				if ok, err := lease.Extend(context.Background()); err != nil {
+				if ok, err := lease.Extend(context.Background(), time.Second); err != nil {
 					panic(err)
 				} else if !ok {
 					log.Printf("extend failed")
