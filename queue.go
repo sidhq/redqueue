@@ -19,7 +19,7 @@ type Queue struct {
 // New creates and returns a new Redsync instance from given Redis connection pools.
 func New(client *redis.Client, name string) *Queue {
 	return &Queue{
-		name:        name + ":requeue",
+		name:        name + ":redqueue",
 		client:      client,
 		expiry:      8 * time.Second,
 		driftFactor: 0.05,
@@ -36,8 +36,18 @@ var pushScript = redis.NewScript(`
 	end
 `)
 
-func (r *Queue) Push(ctx context.Context, name string, expiry time.Duration) (bool, error) {
-	ok, err := pushScript.Run(ctx, r.client, []string{r.name, name}, int(expiry/time.Millisecond)).Result()
+var claimScript = redis.NewScript(`
+	if redis.call("GET", KEYS[1]) == 1 then
+		redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[1])
+		return 1
+	else
+		return 0
+	end
+`)
+
+func (r *Queue) Push(ctx context.Context, item string, expiry time.Duration) (bool, error) {
+	key := item + ":" + r.name
+	ok, err := pushScript.Run(ctx, r.client, []string{r.name, key}, int(expiry/time.Millisecond)).Result()
 	if err != nil {
 		return false, err
 	}
@@ -49,7 +59,7 @@ func (r *Queue) Push(ctx context.Context, name string, expiry time.Duration) (bo
 
 func (r *Queue) Pop(ctx context.Context) (*Lease, error) {
 	start := time.Now()
-	value, err := genValue()
+	token, err := genToken()
 	if err != nil {
 		return nil, errors.Wrap(err, "generate value")
 	}
@@ -60,27 +70,29 @@ func (r *Queue) Pop(ctx context.Context) (*Lease, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "pop")
 	}
-	ok, err := r.client.SetXX(ctx, key, value, r.expiry).Result()
+	res, err := claimScript.Run(ctx, r.client, []string{key}, token, int(r.expiry/time.Millisecond)).Result()
 	if err != nil {
-		return nil, errors.Wrap(err, "set expiry")
+		return nil, errors.Wrap(err, "claim")
 	}
-	if !ok {
+	if res.(int64) == 0 {
 		return nil, nil
 	}
 
 	now := time.Now()
 	until := now.Add(r.expiry - now.Sub(start) - time.Duration(int64(float64(r.expiry)*r.driftFactor)))
-	return r.newLease(key, until, value), nil
+	return r.newLease(key, until, token), nil
 }
 
 // newLease returns a new distributed mutex with given name.
-func (r *Queue) newLease(name string, until time.Time, value string) *Lease {
+func (r *Queue) newLease(key string, until time.Time, token string) *Lease {
+	item := key[:len(key)-len(r.name)-1]
 	m := &Lease{
-		name:        name,
+		item:        item,
+		key:         key,
 		expiry:      1 * time.Second,
 		client:      r.client,
 		driftFactor: r.driftFactor,
-		value:       value,
+		token:       token,
 		until:       until,
 	}
 	return m

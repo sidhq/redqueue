@@ -15,20 +15,21 @@ var ErrExtendFailed = errors.New("redsync: failed to extend lock")
 
 // A Lease is a distributed mutual exclusion lock.
 type Lease struct {
-	name   string
+	item   string
+	key    string
 	expiry time.Duration
 
 	driftFactor float64
 
-	value string
+	token string
 	until time.Time
 
 	client *redis.Client
 }
 
-// Name returns mutex name (i.e. the Redis key).
-func (m *Lease) Name() string {
-	return m.name
+// Item returns mutex name (i.e. the Redis key).
+func (m *Lease) Item() string {
+	return m.item
 }
 
 // Until returns the time of validity of acquired lock. The value will be zero value until a lock is acquired.
@@ -36,20 +37,20 @@ func (m *Lease) Until() time.Time {
 	return m.until
 }
 
-// Unlock unlocks m and returns the status of unlock.
-func (m *Lease) Unlock(ctx context.Context) (bool, error) {
-	return m.release(ctx, m.client, m.value)
+// Release unlocks m and returns the status of unlock.
+func (m *Lease) Release(ctx context.Context) (bool, error) {
+	return m.release(ctx, m.client, m.token)
 }
 
 // Extend resets the mutex's expiry and returns the status of expiry extension.
 func (m *Lease) Extend(ctx context.Context) (bool, error) {
 	start := time.Now()
-	held, err := m.touch(ctx, m.client, m.value, int(m.expiry/time.Millisecond))
+	held, err := m.touch(ctx, m.client, m.token, m.expiry)
 	if err != nil {
 		return false, err
 	}
 	if !held {
-		return false, ErrExtendFailed
+		return false, nil
 	}
 	now := time.Now()
 	until := now.Add(m.expiry - now.Sub(start) - time.Duration(int64(float64(m.expiry)*m.driftFactor)))
@@ -60,7 +61,7 @@ func (m *Lease) Extend(ctx context.Context) (bool, error) {
 	return false, ErrExtendFailed
 }
 
-func genValue() (string, error) {
+func genToken() (string, error) {
 	b := make([]byte, 16)
 	_, err := rand.Read(b)
 	if err != nil {
@@ -77,8 +78,8 @@ var deleteScript = redis.NewScript(`
 	end
 `)
 
-func (m *Lease) release(ctx context.Context, client *redis.Client, value string) (bool, error) {
-	status, err := deleteScript.Run(ctx, client, []string{m.name}, value).Result()
+func (m *Lease) release(ctx context.Context, client *redis.Client, token string) (bool, error) {
+	status, err := deleteScript.Run(ctx, client, []string{m.key}, token).Result()
 	if err != nil {
 		return false, err
 	}
@@ -93,8 +94,8 @@ var touchScript = redis.NewScript(`
 	end
 `)
 
-func (m *Lease) touch(ctx context.Context, client *redis.Client, value string, expiry int) (bool, error) {
-	status, err := touchScript.Run(ctx, client, []string{m.name}, value, expiry).Result()
+func (m *Lease) touch(ctx context.Context, client *redis.Client, token string, expiry time.Duration) (bool, error) {
+	status, err := touchScript.Run(ctx, client, []string{m.key}, token, int(expiry/time.Millisecond)).Result()
 	if err != nil {
 		return false, err
 	}
